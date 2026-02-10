@@ -48,10 +48,7 @@ class Player:
         
         # Apply gravity to velocity
         self.vel = gravity_manager.apply(self.vel, dt)
-        
-        # Clamp velocity to max fall speed
-        if self.vel.length() > MAX_FALL_SPEED:
-            self.vel.scale_to_length(MAX_FALL_SPEED)
+        self._clamp_velocity(gravity_manager)
         
         # Check ground detection
         self._check_ground(tilemap, gravity_manager)
@@ -60,16 +57,86 @@ class Player:
         if self.is_grounded:
             self._auto_walk(gravity_manager)
         
-        # Apply velocity to position
-        self.pos += self.vel * dt
-        
-        # Update collision rect (pos represents top-left corner)
+        # Move X axis
+        delta_x = self.vel.x * dt
+        self.pos.x += delta_x
         self.rect.x = int(self.pos.x)
-        self.rect.y = int(self.pos.y)
+        self._resolve_axis(tilemap, gravity_manager, "x", delta_x)
         
-        # Handle collisions
-        self._handle_collisions(tilemap, gravity_manager)
-    
+        # Move Y axis
+        delta_y = self.vel.y * dt
+        self.pos.y += delta_y
+        self.rect.y = int(self.pos.y)
+        self._resolve_axis(tilemap, gravity_manager, "y", delta_y)
+        
+        # Re-check ground after resolving collisions
+        self._check_ground(tilemap, gravity_manager)
+        
+    def _clamp_velocity(self, gravity_manager):
+        """Clamp velocity along the gravity axis to max fall speed."""
+        gravity_dir = gravity_manager.get_down_direction()
+        if abs(gravity_dir.y) >= abs(gravity_dir.x):
+            self.vel.y = max(min(self.vel.y, MAX_FALL_SPEED), -MAX_FALL_SPEED)
+        else:
+            self.vel.x = max(min(self.vel.x, MAX_FALL_SPEED), -MAX_FALL_SPEED)
+
+    def _get_solid_tile_rects(self, tilemap):
+        """Return solid tile rects overlapped by the player."""
+        tile_size = tilemap.tile_size
+        left = max(self.rect.left // tile_size, 0)
+        right = min((self.rect.right - 1) // tile_size, tilemap.width - 1)
+        top = max(self.rect.top // tile_size, 0)
+        bottom = min((self.rect.bottom - 1) // tile_size, tilemap.height - 1)
+        
+        if right < left or bottom < top:
+            return []
+        
+        rects = []
+        for tile_y in range(top, bottom + 1):
+            for tile_x in range(left, right + 1):
+                if tilemap.is_solid(tile_x * tile_size + 1, tile_y * tile_size + 1):
+                    rects.append(pygame.Rect(tile_x * tile_size, tile_y * tile_size, tile_size, tile_size))
+        return rects
+
+    def _is_walk_axis(self, gravity_manager, axis):
+        """Return True if the walk axis matches the given axis."""
+        gravity_dir = gravity_manager.get_down_direction()
+        if abs(gravity_dir.y) >= abs(gravity_dir.x):
+            return axis == "x"
+        return axis == "y"
+
+    def _resolve_axis(self, tilemap, gravity_manager, axis, delta):
+        """Resolve collisions along a single axis."""
+        if delta == 0:
+            return
+        
+        collisions = [rect for rect in self._get_solid_tile_rects(tilemap) if self.rect.colliderect(rect)]
+        if not collisions:
+            return
+        
+        if axis == "x":
+            if delta > 0:
+                target = min(rect.left for rect in collisions)
+                self.rect.right = target
+            else:
+                target = max(rect.right for rect in collisions)
+                self.rect.left = target
+            self.pos.x = self.rect.x
+            self.vel.x = 0
+            if self.is_grounded and self._is_walk_axis(gravity_manager, "x"):
+                self.facing_right = not self.facing_right
+        else:
+            if delta > 0:
+                target = min(rect.top for rect in collisions)
+                self.rect.bottom = target
+            else:
+                target = max(rect.bottom for rect in collisions)
+                self.rect.top = target
+            self.pos.y = self.rect.y
+            self.vel.y = 0
+            if self.is_grounded and self._is_walk_axis(gravity_manager, "y"):
+                self.facing_right = not self.facing_right
+
     def _check_ground(self, tilemap, gravity_manager):
         """Check if player is on the ground relative to current gravity.
         
@@ -77,17 +144,27 @@ class Player:
             tilemap: Current level's tilemap
             gravity_manager: GravityManager instance
         """
-        # Get the gravity direction
         gravity_dir = gravity_manager.get_down_direction()
+        probe_offset = 2
         
-        # Check for ground in the direction of gravity
-        # For now, simple ground check - will be enhanced with tilemap collision
-        check_distance = 5  # pixels to check below player
-        
-        check_pos = self.pos + gravity_dir * (max(self.width, self.height) / 2 + check_distance)
-        
-        # Check if there's a solid tile at the check position
-        self.is_grounded = tilemap.is_solid(int(check_pos.x), int(check_pos.y))
+        if abs(gravity_dir.y) >= abs(gravity_dir.x):
+            # Gravity is vertical, probe below/above
+            x_positions = [self.rect.left + 2, self.rect.centerx, self.rect.right - 2]
+            if gravity_dir.y > 0:
+                check_y = self.rect.bottom + probe_offset
+            else:
+                check_y = self.rect.top - probe_offset
+            
+            self.is_grounded = any(tilemap.is_solid(int(x), int(check_y)) for x in x_positions)
+        else:
+            # Gravity is horizontal, probe left/right
+            y_positions = [self.rect.top + 2, self.rect.centery, self.rect.bottom - 2]
+            if gravity_dir.x > 0:
+                check_x = self.rect.right + probe_offset
+            else:
+                check_x = self.rect.left - probe_offset
+            
+            self.is_grounded = any(tilemap.is_solid(int(check_x), int(y)) for y in y_positions)
     
     def _auto_walk(self, gravity_manager):
         """Make player auto-walk along the ground.
@@ -115,26 +192,8 @@ class Player:
             # Keep horizontal velocity from gravity
     
     def _handle_collisions(self, tilemap, gravity_manager):
-        """Handle collisions with tilemap.
-        
-        Args:
-            tilemap: Current level's tilemap
-            gravity_manager: GravityManager instance
-        """
-        # Simple collision detection with tiles
-        # Check all corners of the player's bounding box
-        corners = [
-            (self.rect.left, self.rect.top),
-            (self.rect.right, self.rect.top),
-            (self.rect.left, self.rect.bottom),
-            (self.rect.right, self.rect.bottom)
-        ]
-        
-        for corner_x, corner_y in corners:
-            if tilemap.is_solid(corner_x, corner_y):
-                # Player hit a wall, reverse direction
-                self.facing_right = not self.facing_right
-                break
+        """Deprecated: collision handling is now split into axis-specific methods."""
+        pass
     
     def kill(self):
         """Kill the player."""

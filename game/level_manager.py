@@ -22,15 +22,17 @@ class TileType:
 class Tilemap:
     """Manages the game tilemap and collision detection."""
     
-    def __init__(self, width=20, height=15):
+    def __init__(self, width=20, height=15, name=""):
         """Initialize the tilemap.
         
         Args:
             width: Width in tiles
             height: Height in tiles
+            name: Level display name
         """
         self.width = width
         self.height = height
+        self.name = name
         self.tile_size = TILE_SIZE
         self.tiles = [[TileType.EMPTY for _ in range(width)] for _ in range(height)]
         self.spawn_pos = (100, 100)
@@ -205,7 +207,8 @@ class LevelManager:
             with open(level_file, 'r') as f:
                 level_data = json.load(f)
             
-            tilemap = Tilemap(level_data.get('width', 20), level_data.get('height', 15))
+            tilemap = Tilemap(level_data.get('width', 20), level_data.get('height', 15),
+                              level_data.get('name', f"Level {level_number}"))
             
             # Load tiles from ASCII map if provided
             if 'map' in level_data:
@@ -249,7 +252,7 @@ class LevelManager:
                 "##############"
             ]
         
-        tilemap = Tilemap()
+        tilemap = Tilemap(name=f"Level {level_number}")
         tilemap.from_ascii(ascii_map)
         return tilemap
     

@@ -1,8 +1,14 @@
 """Main game loop for Gravity Control."""
 
+import sys
+from pathlib import Path
+
 import pygame
 from pygame.math import Vector2
-import sys
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from game.physics import GravityManager, PHYSICS_TICK
 from game.player import Player
@@ -22,6 +28,7 @@ class GameState:
     PAUSED = "paused"
     LEVEL_COMPLETE = "level_complete"
     DEAD = "dead"
+    MENU = "menu"
 
 
 class GravityGame:
@@ -37,6 +44,7 @@ class GravityGame:
         
         self.clock = pygame.time.Clock()
         self.running = True
+        self.accumulator = 0.0
         
         # Initialize game systems
         self.gravity_manager = GravityManager()
@@ -44,7 +52,8 @@ class GravityGame:
         self.ui = UI(SCREEN_WIDTH, SCREEN_HEIGHT)
         
         # Game state
-        self.state = GameState.PLAYING
+        self.state = GameState.MENU
+        self.menu_option = 0
         self.timer = 0.0
         self.level_completion_time = 0.0
         
@@ -56,8 +65,6 @@ class GravityGame:
         self.player = Player(spawn_x, spawn_y)
         
         print("Gravity Control - Game Started!")
-        print("Use Arrow Keys to rotate gravity")
-        print("Press R to restart, ESC to pause")
     
     def handle_input(self):
         """Handle user input."""
@@ -66,12 +73,29 @@ class GravityGame:
                 self.running = False
             
             if event.type == pygame.KEYDOWN:
+                # Menu Navigation
+                if self.state == GameState.MENU:
+                    if event.key == pygame.K_UP:
+                        self.menu_option = (self.menu_option - 1) % 2
+                    elif event.key == pygame.K_DOWN:
+                        self.menu_option = (self.menu_option + 1) % 2
+                    elif event.key == pygame.K_RETURN:
+                        if self.menu_option == 0: # Start Game
+                            self.start_game()
+                        elif self.menu_option == 1: # Quit
+                            self.running = False
+                    return
+
                 # Pause toggle
                 if event.key == pygame.K_ESCAPE:
                     if self.state == GameState.PLAYING:
                         self.state = GameState.PAUSED
                     elif self.state == GameState.PAUSED:
                         self.state = GameState.PLAYING
+                        
+                # Quit from Pause Menu
+                if self.state == GameState.PAUSED and event.key == pygame.K_q:
+                     self.state = GameState.MENU
                 
                 # Restart level
                 if event.key == pygame.K_r:
@@ -81,29 +105,36 @@ class GravityGame:
                 if self.state == GameState.PLAYING:
                     if event.key == pygame.K_DOWN:
                         self.gravity_manager.set_direction('down')
-                        print("Gravity: DOWN")
                     elif event.key == pygame.K_UP:
                         self.gravity_manager.set_direction('up')
-                        print("Gravity: UP")
                     elif event.key == pygame.K_LEFT:
                         self.gravity_manager.set_direction('left')
-                        print("Gravity: LEFT")
                     elif event.key == pygame.K_RIGHT:
                         self.gravity_manager.set_direction('right')
-                        print("Gravity: RIGHT")
                 
                 # Continue to next level after completion
                 if self.state == GameState.LEVEL_COMPLETE:
                     if event.key == pygame.K_SPACE:
                         self.next_level()
-    
+
+    def start_game(self):
+        """Start a new game from Level 1."""
+        self.level_manager.level_number = 1
+        self.current_tilemap = self.level_manager.load_level(1)
+        self.restart_level()
+        self.state = GameState.PLAYING
+
     def update(self, dt):
         """Update game logic.
         
         Args:
             dt: Delta time in seconds
         """
+        if self.state == GameState.MENU or self.state == GameState.PAUSED:
+            return
+            
         if self.state != GameState.PLAYING:
+            # Still update timer if needed? No.
             return
         
         # Update timer
@@ -133,6 +164,12 @@ class GravityGame:
     
     def draw(self):
         """Draw the game."""
+        
+        if self.state == GameState.MENU:
+            self.ui.draw_main_menu(self.screen, self.menu_option)
+            pygame.display.flip()
+            return
+            
         # Clear screen with dark background
         self.screen.fill((30, 30, 40))
         
@@ -143,7 +180,8 @@ class GravityGame:
         self.player.draw(self.screen)
         
         # Draw HUD
-        self.ui.draw_hud(self.screen, self.level_manager.level_number, 
+        self.ui.draw_hud(self.screen, self.level_manager.level_number,
+                        getattr(self.current_tilemap, "name", ""),
                         self.timer, self.gravity_manager.direction)
         
         # Draw state-specific UI
@@ -197,15 +235,20 @@ class GravityGame:
     
     def run(self):
         """Main game loop."""
+        fixed_dt = 1.0 / PHYSICS_TICK
         while self.running:
             # Calculate delta time
             dt = self.clock.tick(FPS) / 1000.0  # Convert to seconds
+            dt = min(dt, 0.25)
             
             # Handle input
             self.handle_input()
             
-            # Update game
-            self.update(dt)
+            # Fixed timestep updates for stable physics
+            self.accumulator += dt
+            while self.accumulator >= fixed_dt:
+                self.update(fixed_dt)
+                self.accumulator -= fixed_dt
             
             # Draw game
             self.draw()
