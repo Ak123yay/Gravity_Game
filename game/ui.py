@@ -22,8 +22,8 @@ class UI:
         try:
             self.font = pygame.font.Font(None, 36)
             self.small_font = pygame.font.Font(None, 24)
-        except:
-            print("Warning: Could not load fonts")
+        except pygame.error as e:
+            print(f"Warning: Could not load fonts: {e}")
     
     def draw_hud(self, screen, level_number, timer, gravity_direction):
         """Draw the heads-up display.

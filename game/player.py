@@ -63,7 +63,7 @@ class Player:
         # Apply velocity to position
         self.pos += self.vel * dt
         
-        # Update collision rect
+        # Update collision rect (pos represents top-left corner)
         self.rect.x = int(self.pos.x)
         self.rect.y = int(self.pos.y)
         

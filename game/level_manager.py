@@ -212,8 +212,13 @@ class LevelManager:
                 tilemap.from_ascii(level_data['map'])
             
             return tilemap
+        except json.JSONDecodeError as e:
+            print(f"Error loading level {level_number}: Invalid JSON format - {e}")
+            print(f"Please verify the JSON syntax in {level_file}")
+            return self._create_default_level(level_number)
         except Exception as e:
             print(f"Error loading level {level_number}: {e}")
+            print(f"Please verify the file exists and is readable: {level_file}")
             return self._create_default_level(level_number)
     
     def _create_default_level(self, level_number):
