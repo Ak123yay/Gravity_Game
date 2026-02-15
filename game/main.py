@@ -12,7 +12,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from game.physics import GravityManager, PHYSICS_TICK
 from game.player import Player
-from game.level_manager import LevelManager
+from game.level_manager import LevelManager, TILE_SIZE
 from game.ui import UI
 
 
@@ -37,9 +37,10 @@ class GravityGame:
     def __init__(self):
         """Initialize the game."""
         pygame.init()
-        
-        # Set up display
-        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+        # Set up windowed, resizable display so player can run in window mode
+        self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
+        self.screen_width, self.screen_height = self.screen.get_size()
         pygame.display.set_caption("Gravity Control")
         
         self.clock = pygame.time.Clock()
@@ -49,7 +50,7 @@ class GravityGame:
         # Initialize game systems
         self.gravity_manager = GravityManager()
         self.level_manager = LevelManager()
-        self.ui = UI(SCREEN_WIDTH, SCREEN_HEIGHT)
+        self.ui = UI(self.screen_width, self.screen_height)
         
         # Game state
         self.state = GameState.MENU
@@ -57,18 +58,62 @@ class GravityGame:
         self.timer = 0.0
         self.level_completion_time = 0.0
         
-        # Load first level
+        # Load first level and scale to screen
         self.current_tilemap = self.level_manager.load_level(1)
-        
-        # Create player at spawn position
-        spawn_x, spawn_y = self.current_tilemap.spawn_pos
-        self.player = Player(spawn_x, spawn_y)
+        self._scale_current_level()
         
         print("Gravity Control - Game Started!")
+
+    def _scale_current_level(self):
+        """Scale current tilemap so it fills the window and create/update player size.
+
+        This computes an integer tile size that fits the level into the current
+        window and applies it to the tilemap. It also ensures the player exists
+        with a size appropriate for the tile size and places the player at the
+        level spawn.
+        """
+        if not self.current_tilemap:
+            return
+
+        # Compute tile size to make the level fill the screen
+        tile_w = max(1, self.screen_width // max(1, self.current_tilemap.width))
+        tile_h = max(1, self.screen_height // max(1, self.current_tilemap.height))
+        tile_size = min(tile_w, tile_h)
+
+        # Apply to tilemap
+        self.current_tilemap.set_tile_size(tile_size)
+
+        # Create or update player with a size relative to tile size
+        spawn_x, spawn_y = self.current_tilemap.spawn_pos
+        desired_player_size = max(8, int(tile_size * 0.4))
+
+        if hasattr(self, 'player') and self.player is not None:
+            # Update player size and reposition
+            self.player.width = desired_player_size
+            self.player.height = desired_player_size
+            self.player.rect.width = self.player.width
+            self.player.rect.height = self.player.height
+            # Reset player to spawn
+            self.player.reset(spawn_x, spawn_y)
+        else:
+            # Create new player at spawn
+            self.player = Player(spawn_x, spawn_y)
+            self.player.width = desired_player_size
+            self.player.height = desired_player_size
+            self.player.rect.width = self.player.width
+            self.player.rect.height = self.player.height
     
     def handle_input(self):
         """Handle user input."""
         for event in pygame.event.get():
+            # Handle window resize to keep levels filling the screen
+            if event.type == pygame.VIDEORESIZE:
+                self.screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                self.screen_width, self.screen_height = self.screen.get_size()
+                # Update UI dimensions and rescale current level
+                self.ui = UI(self.screen_width, self.screen_height)
+                self._scale_current_level()
+                continue
             if event.type == pygame.QUIT:
                 self.running = False
             
@@ -126,64 +171,69 @@ class GravityGame:
 
     def update(self, dt):
         """Update game logic.
-        
+
         Args:
             dt: Delta time in seconds
         """
+        # Always update UI for animations
+        self.ui.update(dt)
+
         if self.state == GameState.MENU or self.state == GameState.PAUSED:
             return
-            
+
         if self.state != GameState.PLAYING:
             # Still update timer if needed? No.
             return
-        
+
         # Update timer
         self.timer += dt
-        
+
         # Update player
         self.player.update(dt, self.gravity_manager, self.current_tilemap)
-        
+
         # Check for hazards
         if self.current_tilemap.is_hazard(int(self.player.pos.x), int(self.player.pos.y)):
             self.player.kill()
             self.state = GameState.DEAD
             print("Player died on hazard!")
-        
+
         # Check for exit
         if self.current_tilemap.is_exit(int(self.player.pos.x), int(self.player.pos.y), self.player.rect):
             self.level_completion_time = self.timer
             self.state = GameState.LEVEL_COMPLETE
             print(f"Level complete! Time: {self.timer:.2f}s")
-        
+
         # Check if player fell off the map
-        if (self.player.pos.x < -100 or self.player.pos.x > (self.current_tilemap.width * 32 + 100) or
-            self.player.pos.y < -100 or self.player.pos.y > (self.current_tilemap.height * 32 + 100)):
+        map_w_px = self.current_tilemap.width * self.current_tilemap.tile_size
+        map_h_px = self.current_tilemap.height * self.current_tilemap.tile_size
+        if (self.player.pos.x < -100 or self.player.pos.x > (map_w_px + 100) or
+            self.player.pos.y < -100 or self.player.pos.y > (map_h_px + 100)):
             self.player.kill()
             self.state = GameState.DEAD
             print("Player fell off the map!")
     
     def draw(self):
         """Draw the game."""
-        
+
         if self.state == GameState.MENU:
             self.ui.draw_main_menu(self.screen, self.menu_option)
             pygame.display.flip()
             return
-            
-        # Clear screen with dark background
-        self.screen.fill((30, 30, 40))
-        
+
+        # Clear screen with modern dark background
+        self.screen.fill((20, 22, 35))
+
         # Draw level
         self.current_tilemap.draw(self.screen)
-        
+
         # Draw player
         self.player.draw(self.screen)
-        
+
         # Draw HUD
         self.ui.draw_hud(self.screen, self.level_manager.level_number,
                         getattr(self.current_tilemap, "name", ""),
                         self.timer, self.gravity_manager.direction)
-        
+
         # Draw state-specific UI
         if self.state == GameState.PAUSED:
             self.ui.draw_pause_menu(self.screen)
@@ -191,7 +241,7 @@ class GravityGame:
             self.ui.draw_level_complete(self.screen, self.level_completion_time)
         elif self.state == GameState.DEAD:
             self.ui.draw_death_screen(self.screen)
-        
+
         # Update display
         pygame.display.flip()
     

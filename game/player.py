@@ -9,6 +9,7 @@ from game.physics import MAX_FALL_SPEED
 WALK_SPEED = 80  # px/s
 PLAYER_WIDTH = 28  # px
 PLAYER_HEIGHT = 28  # px
+GROUND_FRICTION = 0.85  # Applied to velocity when grounded (lower = more friction)
 
 
 class Player:
@@ -37,7 +38,7 @@ class Player:
     
     def update(self, dt, gravity_manager, tilemap):
         """Update player physics and position.
-        
+
         Args:
             dt: Delta time in seconds
             gravity_manager: GravityManager instance
@@ -45,30 +46,40 @@ class Player:
         """
         if not self.alive:
             return
-        
+
         # Apply gravity to velocity
         self.vel = gravity_manager.apply(self.vel, dt)
         self._clamp_velocity(gravity_manager)
-        
+
         # Check ground detection
         self._check_ground(tilemap, gravity_manager)
-        
+
+        # Apply friction to gravity axis when grounded to prevent sliding
+        if self.is_grounded:
+            gravity_dir = gravity_manager.get_down_direction()
+            if abs(gravity_dir.y) >= abs(gravity_dir.x):
+                # Vertical gravity - apply friction to Y velocity
+                self.vel.y *= GROUND_FRICTION
+            else:
+                # Horizontal gravity - apply friction to X velocity
+                self.vel.x *= GROUND_FRICTION
+
         # Auto-walk if grounded
         if self.is_grounded:
             self._auto_walk(gravity_manager)
-        
+
         # Move X axis
         delta_x = self.vel.x * dt
         self.pos.x += delta_x
         self.rect.x = int(self.pos.x)
         self._resolve_axis(tilemap, gravity_manager, "x", delta_x)
-        
+
         # Move Y axis
         delta_y = self.vel.y * dt
         self.pos.y += delta_y
         self.rect.y = int(self.pos.y)
         self._resolve_axis(tilemap, gravity_manager, "y", delta_y)
-        
+
         # Re-check ground after resolving collisions
         self._check_ground(tilemap, gravity_manager)
         
@@ -106,64 +117,91 @@ class Player:
         return axis == "y"
 
     def _resolve_axis(self, tilemap, gravity_manager, axis, delta):
-        """Resolve collisions along a single axis."""
+        """Resolve collisions along a single axis with improved accuracy.
+
+        Args:
+            tilemap: Current level's tilemap
+            gravity_manager: GravityManager instance
+            axis: "x" or "y"
+            delta: Movement delta for this frame
+        """
         if delta == 0:
             return
-        
+
         collisions = [rect for rect in self._get_solid_tile_rects(tilemap) if self.rect.colliderect(rect)]
         if not collisions:
             return
-        
+
         if axis == "x":
             if delta > 0:
+                # Moving right, align to leftmost collision
                 target = min(rect.left for rect in collisions)
                 self.rect.right = target
             else:
+                # Moving left, align to rightmost collision
                 target = max(rect.right for rect in collisions)
                 self.rect.left = target
-            self.pos.x = self.rect.x
+            # Update position and stop velocity
+            self.pos.x = float(self.rect.x)
             self.vel.x = 0
+            # Reverse direction if grounded and walking along this axis
             if self.is_grounded and self._is_walk_axis(gravity_manager, "x"):
                 self.facing_right = not self.facing_right
-        else:
+        else:  # axis == "y"
             if delta > 0:
+                # Moving down, align to topmost collision
                 target = min(rect.top for rect in collisions)
                 self.rect.bottom = target
             else:
+                # Moving up, align to bottommost collision
                 target = max(rect.bottom for rect in collisions)
                 self.rect.top = target
-            self.pos.y = self.rect.y
+            # Update position and stop velocity
+            self.pos.y = float(self.rect.y)
             self.vel.y = 0
+            # Reverse direction if grounded and walking along this axis
             if self.is_grounded and self._is_walk_axis(gravity_manager, "y"):
                 self.facing_right = not self.facing_right
 
     def _check_ground(self, tilemap, gravity_manager):
         """Check if player is on the ground relative to current gravity.
-        
+
         Args:
             tilemap: Current level's tilemap
             gravity_manager: GravityManager instance
         """
         gravity_dir = gravity_manager.get_down_direction()
-        probe_offset = 2
-        
+        probe_offset = 4  # Increased from 2 for more reliable detection
+
         if abs(gravity_dir.y) >= abs(gravity_dir.x):
-            # Gravity is vertical, probe below/above
-            x_positions = [self.rect.left + 2, self.rect.centerx, self.rect.right - 2]
+            # Gravity is vertical, probe below/above with more points
+            x_positions = [
+                self.rect.left + 2,
+                self.rect.left + self.width // 4,
+                self.rect.centerx,
+                self.rect.right - self.width // 4,
+                self.rect.right - 2
+            ]
             if gravity_dir.y > 0:
                 check_y = self.rect.bottom + probe_offset
             else:
                 check_y = self.rect.top - probe_offset
-            
+
             self.is_grounded = any(tilemap.is_solid(int(x), int(check_y)) for x in x_positions)
         else:
-            # Gravity is horizontal, probe left/right
-            y_positions = [self.rect.top + 2, self.rect.centery, self.rect.bottom - 2]
+            # Gravity is horizontal, probe left/right with more points
+            y_positions = [
+                self.rect.top + 2,
+                self.rect.top + self.height // 4,
+                self.rect.centery,
+                self.rect.bottom - self.height // 4,
+                self.rect.bottom - 2
+            ]
             if gravity_dir.x > 0:
                 check_x = self.rect.right + probe_offset
             else:
                 check_x = self.rect.left - probe_offset
-            
+
             self.is_grounded = any(tilemap.is_solid(int(check_x), int(y)) for y in y_positions)
     
     def _auto_walk(self, gravity_manager):
@@ -214,27 +252,49 @@ class Player:
         self.is_grounded = False
     
     def draw(self, screen, camera_offset=(0, 0)):
-        """Draw the player.
-        
+        """Draw the player with enhanced visuals.
+
         Args:
             screen: Pygame surface to draw on
             camera_offset: Camera offset (x, y)
         """
         if not self.alive:
             return
-        
+
         draw_x = self.rect.x - camera_offset[0]
         draw_y = self.rect.y - camera_offset[1]
-        
-        # Draw player as a simple colored rectangle for now
-        color = (200, 200, 100)  # Yellow-ish
-        pygame.draw.rect(screen, color, (draw_x, draw_y, self.width, self.height))
-        
-        # Draw a small indicator showing facing direction
-        indicator_size = 4
+
+        # Modern color scheme for player
+        main_color = (100, 220, 255)  # Bright cyan
+        outline_color = (50, 120, 180)  # Darker cyan
+        face_color = (255, 200, 80)  # Warm orange for facing indicator
+
+        # Draw shadow/glow effect
+        shadow_rect = pygame.Rect(draw_x + 2, draw_y + 2, self.width, self.height)
+        shadow_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        shadow_surface.fill((10, 10, 30, 100))
+        screen.blit(shadow_surface, shadow_rect.topleft)
+
+        # Draw player outline (for depth)
+        outline_rect = pygame.Rect(draw_x - 1, draw_y - 1, self.width + 2, self.height + 2)
+        pygame.draw.rect(screen, outline_color, outline_rect, border_radius=3)
+
+        # Draw player main body
+        player_rect = pygame.Rect(draw_x, draw_y, self.width, self.height)
+        pygame.draw.rect(screen, main_color, player_rect, border_radius=3)
+
+        # Draw inner highlight for 3D effect
+        highlight_rect = pygame.Rect(draw_x + 2, draw_y + 2, self.width - 4, self.height // 2)
+        pygame.draw.rect(screen, (150, 240, 255), highlight_rect, border_radius=2)
+
+        # Draw facing direction indicator (larger and more visible)
+        indicator_size = 6
         if self.facing_right:
-            indicator_x = draw_x + self.width - indicator_size
+            indicator_x = draw_x + self.width - indicator_size - 3
         else:
-            indicator_x = draw_x
-        pygame.draw.rect(screen, (255, 0, 0), 
-                        (indicator_x, draw_y + self.height // 2, indicator_size, indicator_size))
+            indicator_x = draw_x + 3
+
+        indicator_y = draw_y + self.height // 2 - indicator_size // 2
+        # Draw indicator with outline
+        pygame.draw.circle(screen, (100, 50, 20), (indicator_x + indicator_size // 2 + 1, indicator_y + indicator_size // 2 + 1), indicator_size // 2 + 1)
+        pygame.draw.circle(screen, face_color, (indicator_x + indicator_size // 2, indicator_y + indicator_size // 2), indicator_size // 2)
