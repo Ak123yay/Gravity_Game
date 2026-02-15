@@ -14,6 +14,10 @@ from game.physics import GravityManager, PHYSICS_TICK
 from game.player import Player
 from game.level_manager import LevelManager, TILE_SIZE
 from game.ui import UI
+from game.settings import Settings, GameState as GameStateManager
+from game.particles import ParticleManager
+from game.effects import ScreenShake
+from game.transitions import TransitionManager
 
 
 # Screen constants
@@ -29,6 +33,7 @@ class GameState:
     LEVEL_COMPLETE = "level_complete"
     DEAD = "dead"
     MENU = "menu"
+    SETTINGS = "settings"
 
 
 class GravityGame:
@@ -46,22 +51,38 @@ class GravityGame:
         self.clock = pygame.time.Clock()
         self.running = True
         self.accumulator = 0.0
-        
+
+        # Initialize settings and game state manager
+        self.settings = Settings()
+        self.game_state_manager = GameStateManager()
+
+        # Initialize particle system
+        particle_limit = self.settings.get_particle_limit()
+        self.particle_manager = ParticleManager(particle_limit)
+
+        # Initialize effects
+        self.screen_shake = ScreenShake()
+        self.screen_shake.set_enabled(self.settings.get("graphics", "screen_shake"))
+
+        # Initialize transitions
+        self.transition_manager = TransitionManager()
+
         # Initialize game systems
         self.gravity_manager = GravityManager()
         self.level_manager = LevelManager()
         self.ui = UI(self.screen_width, self.screen_height)
-        
+
         # Game state
         self.state = GameState.MENU
         self.menu_option = 0
         self.timer = 0.0
         self.level_completion_time = 0.0
-        
+        self.death_count = 0
+
         # Load first level and scale to screen
         self.current_tilemap = self.level_manager.load_level(1)
         self._scale_current_level()
-        
+
         print("Gravity Control - Game Started!")
 
     def _scale_current_level(self):
@@ -105,6 +126,10 @@ class GravityGame:
     
     def handle_input(self):
         """Handle user input."""
+        # Update mouse position for UI
+        mouse_pos = pygame.mouse.get_pos()
+        self.ui.update_mouse_pos(mouse_pos)
+
         for event in pygame.event.get():
             # Handle window resize to keep levels filling the screen
             if event.type == pygame.VIDEORESIZE:
@@ -116,36 +141,52 @@ class GravityGame:
                 continue
             if event.type == pygame.QUIT:
                 self.running = False
-            
+
             if event.type == pygame.KEYDOWN:
                 # Menu Navigation
                 if self.state == GameState.MENU:
                     if event.key == pygame.K_UP:
-                        self.menu_option = (self.menu_option - 1) % 2
+                        self.menu_option = (self.menu_option - 1) % 3
                     elif event.key == pygame.K_DOWN:
-                        self.menu_option = (self.menu_option + 1) % 2
+                        self.menu_option = (self.menu_option + 1) % 3
                     elif event.key == pygame.K_RETURN:
-                        if self.menu_option == 0: # Start Game
+                        if self.menu_option == 0:  # Start Game
+                            self.ui.reset_menu_animation()
                             self.start_game()
-                        elif self.menu_option == 1: # Quit
+                        elif self.menu_option == 1:  # Settings
+                            self.state = GameState.SETTINGS
+                            self.ui.settings_category = 0
+                        elif self.menu_option == 2:  # Quit
                             self.running = False
+                    return
+
+                # Settings Menu Navigation
+                if self.state == GameState.SETTINGS:
+                    if event.key == pygame.K_UP:
+                        self.ui.settings_category = (self.ui.settings_category - 1) % 4
+                    elif event.key == pygame.K_DOWN:
+                        self.ui.settings_category = (self.ui.settings_category + 1) % 4
+                    elif event.key == pygame.K_ESCAPE or event.key == pygame.K_BACKSPACE:
+                        self.state = GameState.MENU
+                        self.menu_option = 0
                     return
 
                 # Pause toggle
                 if event.key == pygame.K_ESCAPE:
                     if self.state == GameState.PLAYING:
                         self.state = GameState.PAUSED
+                        self.ui.reset_pause_animation()
                     elif self.state == GameState.PAUSED:
                         self.state = GameState.PLAYING
-                        
+
                 # Quit from Pause Menu
                 if self.state == GameState.PAUSED and event.key == pygame.K_q:
-                     self.state = GameState.MENU
-                
+                    self.state = GameState.MENU
+
                 # Restart level
                 if event.key == pygame.K_r:
                     self.restart_level()
-                
+
                 # Gravity rotation (only when playing)
                 if self.state == GameState.PLAYING:
                     if event.key == pygame.K_DOWN:
@@ -156,7 +197,7 @@ class GravityGame:
                         self.gravity_manager.set_direction('left')
                     elif event.key == pygame.K_RIGHT:
                         self.gravity_manager.set_direction('right')
-                
+
                 # Continue to next level after completion
                 if self.state == GameState.LEVEL_COMPLETE:
                     if event.key == pygame.K_SPACE:
@@ -178,11 +219,22 @@ class GravityGame:
         # Always update UI for animations
         self.ui.update(dt)
 
+        # Update particle system
+        self.particle_manager.update(dt)
+
+        # Update screen shake
+        self.screen_shake.update(dt)
+
+        # Update transitions
+        self.transition_manager.update(dt)
+
         if self.state == GameState.MENU or self.state == GameState.PAUSED:
             return
 
+        if self.state == GameState.SETTINGS:
+            return
+
         if self.state != GameState.PLAYING:
-            # Still update timer if needed? No.
             return
 
         # Update timer
@@ -195,13 +247,31 @@ class GravityGame:
         if self.current_tilemap.is_hazard(int(self.player.pos.x), int(self.player.pos.y)):
             self.player.kill()
             self.state = GameState.DEAD
+            self.death_count += 1
+            self.game_state_manager.increment_deaths()
+            # Trigger death effects
+            self.screen_shake.trigger(10, 0.25)
+            self.particle_manager.emit('gameplay', 'burst',
+                                      x=self.player.pos.x, y=self.player.pos.y,
+                                      count=30, color=(255, 80, 100),
+                                      speed_range=(80, 200), size_range=(3, 6))
+            self.ui.reset_death_animation()
             print("Player died on hazard!")
 
         # Check for exit
         if self.current_tilemap.is_exit(int(self.player.pos.x), int(self.player.pos.y), self.player.rect):
             self.level_completion_time = self.timer
             self.state = GameState.LEVEL_COMPLETE
-            print(f"Level complete! Time: {self.timer:.2f}s")
+            # Trigger level complete effects
+            self.screen_shake.trigger(6, 0.15)
+            self.particle_manager.emit('ui', 'confetti',
+                                      x=self.screen_width // 2, y=0,
+                                      count=50, colors=[(80, 230, 150), (80, 180, 255), (255, 180, 70)])
+            self.ui.reset_level_complete_animation()
+            # Save best time
+            is_new_best = self.game_state_manager.set_best_time(self.level_manager.level_number, self.timer)
+            self.game_state_manager.mark_level_complete(self.level_manager.level_number)
+            print(f"Level complete! Time: {self.timer:.2f}s" + (" (New Best!)" if is_new_best else ""))
 
         # Check if player fell off the map
         map_w_px = self.current_tilemap.width * self.current_tilemap.tile_size
@@ -210,29 +280,52 @@ class GravityGame:
             self.player.pos.y < -100 or self.player.pos.y > (map_h_px + 100)):
             self.player.kill()
             self.state = GameState.DEAD
+            self.death_count += 1
+            self.game_state_manager.increment_deaths()
+            self.screen_shake.trigger(10, 0.25)
+            self.ui.reset_death_animation()
             print("Player fell off the map!")
-    
+
     def draw(self):
         """Draw the game."""
+        # Get screen shake offset
+        shake_offset = self.screen_shake.get_offset()
 
         if self.state == GameState.MENU:
             self.ui.draw_main_menu(self.screen, self.menu_option)
             pygame.display.flip()
             return
 
+        if self.state == GameState.SETTINGS:
+            self.ui.draw_settings_menu(self.screen, self.settings)
+            pygame.display.flip()
+            return
+
         # Clear screen with modern dark background
         self.screen.fill((20, 22, 35))
 
-        # Draw level
-        self.current_tilemap.draw(self.screen)
+        # Draw level with screen shake
+        self.current_tilemap.draw(self.screen, shake_offset)
 
-        # Draw player
-        self.player.draw(self.screen)
+        # Draw player with screen shake
+        self.player.draw(self.screen, shake_offset)
 
-        # Draw HUD
-        self.ui.draw_hud(self.screen, self.level_manager.level_number,
-                        getattr(self.current_tilemap, "name", ""),
-                        self.timer, self.gravity_manager.direction)
+        # Draw particles (gameplay particles affected by shake)
+        self.particle_manager.draw(self.screen, shake_offset)
+
+        # Draw HUD (not affected by screen shake)
+        if self.settings.get("game", "show_timer"):
+            self.ui.draw_hud(self.screen, self.level_manager.level_number,
+                            getattr(self.current_tilemap, "name", ""),
+                            self.timer, self.gravity_manager.direction)
+
+        # Draw FPS if enabled
+        if self.settings.get("game", "show_fps"):
+            fps = self.clock.get_fps()
+            if self.ui.small_font:
+                fps_text = f"FPS: {fps:.0f}"
+                fps_surface = self.ui.small_font.render(fps_text, True, self.ui.colors["muted"])
+                self.screen.blit(fps_surface, (self.screen_width - 100, self.screen_height - 30))
 
         # Draw state-specific UI
         if self.state == GameState.PAUSED:
@@ -241,6 +334,9 @@ class GravityGame:
             self.ui.draw_level_complete(self.screen, self.level_completion_time)
         elif self.state == GameState.DEAD:
             self.ui.draw_death_screen(self.screen)
+
+        # Draw transitions on top
+        self.transition_manager.draw(self.screen)
 
         # Update display
         pygame.display.flip()

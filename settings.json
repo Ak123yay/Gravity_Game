@@ -1,0 +1,29 @@
+{
+  "audio": {
+    "master_volume": 100,
+    "sfx_volume": 100,
+    "music_volume": 100,
+    "muted": false
+  },
+  "graphics": {
+    "particle_quality": "high",
+    "screen_shake": true,
+    "background_speed": "normal",
+    "vsync": true,
+    "fullscreen": false
+  },
+  "controls": {
+    "gravity_up": "up",
+    "gravity_down": "down",
+    "gravity_left": "left",
+    "gravity_right": "right",
+    "restart": "r",
+    "pause": "escape",
+    "continue": "space"
+  },
+  "game": {
+    "show_timer": true,
+    "show_fps": false,
+    "show_hints": true
+  }
+}

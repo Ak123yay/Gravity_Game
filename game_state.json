@@ -1,0 +1,19 @@
+{
+  "current_level": 1,
+  "best_times": {
+    "1": 0.6,
+    "2": 11.617,
+    "3": 4.3,
+    "4": 3.383,
+    "5": 4.067
+  },
+  "levels_completed": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "total_deaths": 0,
+  "total_playtime": 0.0
+}
