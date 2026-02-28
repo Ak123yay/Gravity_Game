@@ -1,6 +1,6 @@
 # Gravity Control
 
-A 2D puzzle-platformer where you don't control the hero—you control gravity!
+A 2D puzzle-platformer where you don't control the hero,you control gravity!
 
 ## Overview
 
